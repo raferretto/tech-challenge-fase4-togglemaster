@@ -19,7 +19,7 @@ spec:
       serviceAccountName: self-healing
       containers:
         - name: self-healing
-          image: 423136744371.dkr.ecr.us-east-1.amazonaws.com/togglemaster/self-healing:latest
+          image: 423136744371.dkr.ecr.us-east-1.amazonaws.com/togglemaster/self-healing:v1.0.0-e7e592e
           imagePullPolicy: Always
           ports:
             - name: http
