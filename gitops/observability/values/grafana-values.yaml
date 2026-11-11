@@ -1,0 +1,238 @@
+# ==============================================================================
+# Grafana (chart grafana-community/grafana)
+# Visualização (dashboard customizado), consulta de logs e ALERTAS:
+#   regra EvaluationServiceHighErrorRate -> PagerDuty + Slack + webhook de Self-Healing
+#
+# Credenciais NÃO ficam no Git: vêm dos Secrets criados por
+# scripts/fase4/02-create-observability-secrets.sh
+#   grafana-admin             -> usuário e senha do administrador
+#   grafana-alerting-secrets  -> PAGERDUTY_INTEGRATION_KEY, SLACK_WEBHOOK_URL, SELF_HEALING_HMAC_SECRET
+# ==============================================================================
+admin:
+  existingSecret: grafana-admin
+  userKey: admin-user
+  passwordKey: admin-password
+
+# Variáveis de ambiente usadas no provisionamento dos pontos de contato ($VARIAVEL)
+envFromSecret: grafana-alerting-secrets
+
+persistence:
+  enabled: false            # laboratório: tudo é provisionado por código, nada se perde
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+service:
+  type: ClusterIP           # acesso por kubectl port-forward (não é publicado por Ingress)
+  port: 80
+
+testFramework:
+  enabled: false
+
+grafana.ini:
+  server:
+    # usado nos links das notificações; coincide com o port-forward local
+    root_url: http://localhost:3000
+  analytics:
+    reporting_enabled: false
+    check_for_updates: false
+  unified_alerting:
+    enabled: true
+    # avaliação mínima de 10s permite o intervalo de 30s da regra
+    min_interval: 10s
+
+# ------------------------------------------------------------------------------
+# Fontes de dados
+# ------------------------------------------------------------------------------
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus-server.observability.svc.cluster.local
+        isDefault: true
+        jsonData:
+          timeInterval: 15s
+      - name: Loki
+        uid: loki
+        type: loki
+        access: proxy
+        url: http://loki.observability.svc.cluster.local:3100
+
+# ------------------------------------------------------------------------------
+# Dashboard customizado (ConfigMap gerado em gitops/observability/grafana-dashboards)
+# ------------------------------------------------------------------------------
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: togglemaster
+        orgId: 1
+        folder: ToggleMaster
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/togglemaster
+
+dashboardsConfigMaps:
+  togglemaster: grafana-dashboards-togglemaster
+
+# ------------------------------------------------------------------------------
+# Alertas (Grafana Alerting provisionado por arquivo)
+# Atenção às camadas de template:
+#   - o chart processa este bloco com `tpl` do Helm: todo {{ ... }} destinado ao
+#     Grafana precisa estar entre {{ ` e ` }};
+#   - o Grafana substitui $VARIAVEL por variáveis de ambiente nos pontos de contato.
+# ------------------------------------------------------------------------------
+alerting:
+  rules.yaml:
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: togglemaster-disponibilidade
+        folder: ToggleMaster
+        interval: 30s
+        rules:
+          - uid: evaluation-service-5xx
+            title: EvaluationServiceHighErrorRate
+            condition: C
+            data:
+              # A: % de respostas HTTP 5xx do evaluation-service nos últimos 5 minutos.
+              #    Só retorna valor com pelo menos 20 requisições no período (evita
+              #    conclusões baseadas em poucas requisições).
+              - refId: A
+                relativeTimeRange:
+                  from: 600
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  refId: A
+                  datasource:
+                    type: prometheus
+                    uid: prometheus
+                  editorMode: code
+                  expr: >-
+                    (100 * sum(rate(togglemaster_http_server_requests_total{service_name="evaluation-service",http_response_status_code=~"5.."}[5m]))
+                    / sum(rate(togglemaster_http_server_requests_total{service_name="evaluation-service"}[5m])))
+                    and (sum(increase(togglemaster_http_server_requests_total{service_name="evaluation-service"}[5m])) >= 20)
+                  instant: true
+                  range: false
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              # C: dispara quando A > 20 (%)
+              - refId: C
+                datasourceUid: __expr__
+                model:
+                  refId: C
+                  type: threshold
+                  expression: A
+                  datasource:
+                    type: __expr__
+                    uid: __expr__
+                  conditions:
+                    - type: query
+                      evaluator:
+                        type: gt
+                        params:
+                          - 20
+                      operator:
+                        type: and
+                      query:
+                        params:
+                          - C
+                      reducer:
+                        type: last
+                        params: []
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+            dashboardUid: togglemaster-overview
+            panelId: 6
+            # sem tráfego (ou sem erros) não há dado: o alerta permanece Normal
+            noDataState: OK
+            execErrState: OK
+            # a condição precisa se manter por 2 minutos (reduz disparos por oscilações breves)
+            for: 2m
+            annotations:
+              summary: Taxa de erros HTTP 5xx do evaluation-service acima de 20%
+              description: >-
+                Mais de 20% das requisições ao evaluation-service retornaram erro 5xx nos últimos
+                5 minutos (mínimo de 20 requisições). O Self-Healing reinicia o deployment automaticamente.
+              error_rate: '{{ `{{ if $values.A }}{{ printf "%.1f" $values.A.Value }}%{{ else }}acima de 20%{{ end }}` }}'
+              runbook_url: https://github.com/raferretto/tech-challenge-fase4-togglemaster/blob/main/docs/fase4/runbook-evaluation-5xx.md
+            labels:
+              severity: critical
+              service: evaluation-service
+              team: togglemaster
+
+  contactpoints.yaml:
+    apiVersion: 1
+    contactPoints:
+      # Um ponto de contato com três integrações acionadas em paralelo
+      - orgId: 1
+        name: togglemaster-resposta-a-incidentes
+        receivers:
+          # 1) Gestão de incidentes: abre (e resolve) o incidente no PagerDuty
+          - uid: togglemaster-pagerduty
+            type: pagerduty
+            disableResolveMessage: false
+            settings:
+              integrationKey: $PAGERDUTY_INTEGRATION_KEY
+              severity: critical
+              class: disponibilidade
+              component: evaluation-service
+              group: togglemaster
+              summary: '{{ `[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} - {{ .CommonAnnotations.summary }}` }}'
+          # 2) ChatOps: notificação detalhada no canal do Slack
+          - uid: togglemaster-slack
+            type: slack
+            disableResolveMessage: false
+            settings:
+              url: $SLACK_WEBHOOK_URL
+              username: Grafana - ToggleMaster
+              icon_emoji: ':rotating_light:'
+              color: '{{ `{{ if eq .Status "firing" }}#D63232{{ else }}#36a64f{{ end }}` }}'
+              title: '{{ `[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} - {{ .CommonLabels.service }}` }}'
+              text: |-
+                {{ `{{ range .Alerts }}*Serviço:* {{ .Labels.service }}
+                *Severidade:* {{ .Labels.severity }}
+                *Estado:* {{ .Status }}
+                *Início:* {{ .StartsAt.Format "02/01/2006 15:04:05 MST" }}
+                *Taxa de erros 5xx:* {{ .Annotations.error_rate }}
+                *Resumo:* {{ .Annotations.summary }}
+                *Descrição:* {{ .Annotations.description }}
+                *Dashboard:* {{ .DashboardURL }}
+                *Incidente:* https://app.pagerduty.com/incidents
+                *Runbook:* {{ .Annotations.runbook_url }}
+                {{ end }}` }}
+          # 3) Self-Healing: webhook interno assinado com HMAC-SHA256
+          - uid: togglemaster-self-healing
+            type: webhook
+            disableResolveMessage: true
+            settings:
+              url: http://self-healing.observability.svc.cluster.local:8080/webhook/grafana
+              httpMethod: POST
+              hmacConfig:
+                secret: $SELF_HEALING_HMAC_SECRET
+                header: X-Grafana-Alerting-Signature
+                timestampHeader: X-Grafana-Alerting-Signature-Timestamp
+
+  policies.yaml:
+    apiVersion: 1
+    policies:
+      - orgId: 1
+        receiver: togglemaster-resposta-a-incidentes
+        group_by:
+          - alertname
+          - service
+        group_wait: 10s
+        group_interval: 1m
+        repeat_interval: 4h

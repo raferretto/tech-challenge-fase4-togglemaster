@@ -1,0 +1,20 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: analytics-keda-scaler
+  namespace: togglemaster
+spec:
+  scaleTargetRef:
+    kind: Deployment
+    name: analytics-service
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  cooldownPeriod: 30
+  pollingInterval: 15
+  triggers:
+    - type: aws-sqs-queue
+      metadata:
+        queueURL: https://sqs.us-east-1.amazonaws.com/423136744371/ToggleMasterEvents
+        queueLength: "5"
+        awsRegion: "us-east-1"
+        identityOwner: "operator"

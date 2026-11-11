@@ -1,0 +1,43 @@
+# ==============================================================================
+# Prometheus (chart prometheus-community/prometheus)
+# Armazena e consulta as métricas de infraestrutura e de aplicação.
+# Dimensionado para laboratório: armazenamento efêmero e retenção curta.
+# ==============================================================================
+server:
+  retention: "6h"
+  persistentVolume:
+    enabled: false          # emptyDir: os dados se perdem se o pod for recriado
+  global:
+    scrape_interval: 15s
+    evaluation_interval: 15s
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+
+# Componentes não utilizados (alertas são avaliados pelo Grafana; economia de pods no laboratório)
+alertmanager:
+  enabled: false
+prometheus-pushgateway:
+  enabled: false
+prometheus-node-exporter:
+  enabled: false
+
+# Estado dos objetos do cluster (réplicas, reinícios de pods etc.) usado no dashboard
+kube-state-metrics:
+  enabled: true
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# Os jobs padrão do chart já cobrem:
+#  - kubernetes-nodes-cadvisor: CPU/memória dos contêineres (métricas de infraestrutura)
+#  - kubernetes-pods: pods com a anotação prometheus.io/scrape=true, entre eles o
+#    gateway do OpenTelemetry Collector (:8889), por onde chegam as métricas das aplicações

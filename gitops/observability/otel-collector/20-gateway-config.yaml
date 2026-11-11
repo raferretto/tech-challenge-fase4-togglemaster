@@ -1,0 +1,121 @@
+# ==============================================================================
+# OpenTelemetry Collector - GATEWAY
+# Peça central da observabilidade: recebe métricas, logs e traces por OTLP
+# (das aplicações e dos agentes), processa e roteia cada sinal ao seu destino:
+#   métricas -> Prometheus (endpoint de scrape :8889)
+#   logs     -> Loki (OTLP/HTTP nativo)
+#   traces   -> New Relic (OTLP/HTTP)
+# ==============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-gateway-config
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: otel-collector-gateway
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      # Protege o Collector em picos de tráfego (recusa dados antes de estourar a memória)
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+
+      # Acrescenta atributos do Kubernetes (deployment, nó, namespace) aos dados recebidos
+      k8s_attributes:
+        auth_type: serviceAccount
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.deployment.name
+            - k8s.node.name
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.name
+              - from: resource_attribute
+                name: k8s.namespace.name
+          - sources:
+              - from: connection
+
+      # Agrupa os dados em lotes para reduzir o número de envios
+      batch:
+        send_batch_size: 1024
+        send_batch_max_size: 2048
+        timeout: 5s
+
+    exporters:
+      # MÉTRICAS: expostas para coleta (scrape) pelo Prometheus
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        # atributos de recurso copiados como rótulos de cada série (service_name, k8s_pod_name...)
+        resource_constant_labels:
+          included:
+            - service.*
+            - deployment.environment.name
+            - k8s.*
+        metric_expiration: 5m
+
+      # LOGS: enviados ao endpoint OTLP nativo do Loki
+      otlp_http/loki:
+        endpoint: ${env:LOKI_OTLP_ENDPOINT}
+        timeout: 10s
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 120s
+        sending_queue:
+          enabled: true
+          queue_size: 1000
+
+      # TRACES: enviados ao New Relic (APM) por OTLP sobre HTTP
+      otlp_http/newrelic:
+        endpoint: ${env:NEW_RELIC_OTLP_ENDPOINT}
+        headers:
+          api-key: ${env:NEW_RELIC_LICENSE_KEY}
+        compression: gzip
+        timeout: 10s
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 120s
+        sending_queue:
+          enabled: true
+          queue_size: 1000
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, k8s_attributes, batch]
+          exporters: [prometheus]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, k8s_attributes, batch]
+          exporters: [otlp_http/loki]
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, k8s_attributes, batch]
+          exporters: [otlp_http/newrelic]

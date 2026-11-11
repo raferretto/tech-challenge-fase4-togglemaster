@@ -1,0 +1,14 @@
+# O ArgoCD detecta este arquivo e gera o ConfigMap com o dashboard a partir do JSON.
+# O Grafana monta o ConfigMap em /var/lib/grafana/dashboards/togglemaster
+# (ver dashboardsConfigMaps em gitops/observability/values/grafana-values.yaml).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: observability
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    app.kubernetes.io/part-of: togglemaster-observability
+configMapGenerator:
+  - name: grafana-dashboards-togglemaster
+    files:
+      - togglemaster-overview.json

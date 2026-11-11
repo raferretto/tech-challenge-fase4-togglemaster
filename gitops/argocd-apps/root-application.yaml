@@ -1,0 +1,210 @@
+# ==============================================================================
+# ArgoCD Applications - Padrão GitOps ToggleMaster
+# Sincronização automatizada para os 5 microsserviços e base
+# (a stack de observabilidade da Fase 4 está em observability-applications.yaml)
+# ==============================================================================
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: togglemaster-base
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/raferretto/tech-challenge-fase4-togglemaster.git
+    targetRevision: HEAD
+    path: gitops/apps/base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: togglemaster
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: togglemaster-auth-service
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/raferretto/tech-challenge-fase4-togglemaster.git
+    targetRevision: HEAD
+    path: gitops/apps/auth-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: togglemaster
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m
+  # Campos alterados em tempo de execução que o ArgoCD não deve reverter:
+  #  - réplicas: ajustadas pelo HPA/KEDA
+  #  - anotações do modelo dos pods: usadas pelo rollout restart do Self-Healing
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: auth-service
+      jsonPointers:
+        - /spec/replicas
+        - /spec/template/metadata/annotations
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: togglemaster-flag-service
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/raferretto/tech-challenge-fase4-togglemaster.git
+    targetRevision: HEAD
+    path: gitops/apps/flag-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: togglemaster
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 10
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: togglemaster-targeting-service
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/raferretto/tech-challenge-fase4-togglemaster.git
+    targetRevision: HEAD
+    path: gitops/apps/targeting-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: togglemaster
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 10
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: togglemaster-evaluation-service
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/raferretto/tech-challenge-fase4-togglemaster.git
+    targetRevision: HEAD
+    path: gitops/apps/evaluation-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: togglemaster
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m
+  # Campos alterados em tempo de execução que o ArgoCD não deve reverter:
+  #  - réplicas: ajustadas pelo HPA/KEDA
+  #  - anotações do modelo dos pods: usadas pelo rollout restart do Self-Healing
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: evaluation-service
+      jsonPointers:
+        - /spec/replicas
+        - /spec/template/metadata/annotations
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: togglemaster-analytics-service
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/raferretto/tech-challenge-fase4-togglemaster.git
+    targetRevision: HEAD
+    path: gitops/apps/analytics-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: togglemaster
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m
+  # Campos alterados em tempo de execução que o ArgoCD não deve reverter:
+  #  - réplicas: ajustadas pelo HPA/KEDA
+  #  - anotações do modelo dos pods: usadas pelo rollout restart do Self-Healing
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: analytics-service
+      jsonPointers:
+        - /spec/replicas
+        - /spec/template/metadata/annotations

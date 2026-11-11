@@ -1,0 +1,10 @@
+.git
+.env
+.idea
+.vscode
+*.md
+tests/
+*_test.go
+coverage.out
+__pycache__
+*.pyc

@@ -1,0 +1,35 @@
+# ==============================================================================
+# RBAC da automação de Self-Healing - privilégio mínimo
+# A ServiceAccount só pode LER e ATUALIZAR (patch) um único deployment:
+# togglemaster/evaluation-service. Qualquer outro recurso é negado.
+# ==============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: self-healing
+  namespace: observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: self-healing-restart-evaluation
+  namespace: togglemaster
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["evaluation-service"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: self-healing-restart-evaluation
+  namespace: togglemaster
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: self-healing-restart-evaluation
+subjects:
+  - kind: ServiceAccount
+    name: self-healing
+    namespace: observability

@@ -1,0 +1,93 @@
+# ==============================================================================
+# OpenTelemetry Collector - AGENTE (um por nó, via DaemonSet)
+# Coleta o que só existe localmente no nó e encaminha ao gateway:
+#   - logs das saídas padrão/erro de todos os contêineres (/var/log/pods)
+#   - métricas de nó, pod e contêiner expostas pelo kubelet
+# ==============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-agent-config
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: otel-collector-agent
+data:
+  config.yaml: |
+    receivers:
+      file_log:
+        include:
+          - /var/log/pods/*/*/*.log
+        exclude:
+          # evita realimentação: o agente não coleta os próprios logs
+          - /var/log/pods/observability_otel-collector-agent-*/*/*.log
+        start_at: end
+        include_file_path: true
+        include_file_name: false
+        operators:
+          # interpreta o formato do runtime (containerd/CRI) e extrai do caminho do
+          # arquivo: k8s.namespace.name, k8s.pod.name, k8s.pod.uid e k8s.container.name
+          - type: container
+            id: container-parser
+        retry_on_failure:
+          enabled: true
+
+      kubelet_stats:
+        collection_interval: 30s
+        auth_type: serviceAccount
+        endpoint: https://${env:K8S_NODE_IP}:10250
+        insecure_skip_verify: true
+        metric_groups:
+          - node
+          - pod
+          - container
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+
+      # Contrato de telemetria: os logs coletados dos arquivos recebem service.name
+      # (nome do contêiner, igual ao do microsserviço) e service.namespace.
+      resource/service-from-k8s:
+        attributes:
+          - key: service.name
+            from_attribute: k8s.container.name
+            action: insert
+          - key: service.namespace
+            from_attribute: k8s.namespace.name
+            action: insert
+
+      batch:
+        send_batch_size: 1024
+        timeout: 5s
+
+    exporters:
+      otlp_grpc:
+        endpoint: otel-collector-gateway.observability.svc.cluster.local:4317
+        tls:
+          insecure: true
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 120s
+        sending_queue:
+          enabled: true
+          queue_size: 1000
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        logs:
+          receivers: [file_log]
+          processors: [memory_limiter, resource/service-from-k8s, batch]
+          exporters: [otlp_grpc]
+        metrics:
+          receivers: [kubelet_stats]
+          processors: [memory_limiter, batch]
+          exporters: [otlp_grpc]

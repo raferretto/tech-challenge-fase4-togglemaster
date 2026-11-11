@@ -1,0 +1,14 @@
+aws_region       = "us-east-1"
+environment      = "production"
+cluster_name     = "togglemaster-cluster"
+vpc_cidr         = "10.0.0.0/16"
+db_password      = "ToggleMaster123"
+
+# Defina como true para AWS Academy (LabRole) ou false para Conta Pessoal
+use_aws_academy  = false
+
+# Fase 4: a stack de observabilidade (Prometheus, Loki, Grafana, OTel Collector) soma
+# ~9 pods. Em t3.small o limite e de 11 pods por no; use t3.medium (17 pods por no).
+node_instance_types = ["t3.medium"]
+desired_nodes       = 3
+install_argocd      = true

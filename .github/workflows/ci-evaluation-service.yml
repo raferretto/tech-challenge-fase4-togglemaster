@@ -1,0 +1,212 @@
+name: CI/CD Evaluation Service (DevSecOps & GitOps)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/evaluation-service/**'
+      - '.github/workflows/ci-evaluation-service.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'services/evaluation-service/**'
+      - '.github/workflows/ci-evaluation-service.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  security-events: write
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: togglemaster/evaluation-service
+  SERVICE_DIR: services/evaluation-service
+  GITOPS_DEPLOYMENT_FILE: gitops/apps/evaluation-service/deployment.yaml
+
+jobs:
+  # --------------------------------------------------------------------------
+  # 1. BUILD & UNIT TEST
+  # --------------------------------------------------------------------------
+  build-and-test:
+    name: 1. Build & Unit Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: ${{ env.SERVICE_DIR }}/go.sum
+
+      - name: Run Unit Tests
+        working-directory: ${{ env.SERVICE_DIR }}
+        run: |
+          go test -v -race ./...
+
+      - name: Compile Binary
+        working-directory: ${{ env.SERVICE_DIR }}
+        run: |
+          CGO_ENABLED=0 GOOS=linux go build -v -o evaluation-service .
+
+  # --------------------------------------------------------------------------
+  # 2. LINTER & STATIC ANALYSIS
+  # --------------------------------------------------------------------------
+  linter:
+    name: 2. Linter & Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: ${{ env.SERVICE_DIR }}/go.sum
+
+      - name: Run Go Vet
+        working-directory: ${{ env.SERVICE_DIR }}
+        run: |
+          go vet ./...
+
+  # --------------------------------------------------------------------------
+  # 3. SECURITY SCAN (SCA & SAST COM REGRA DE BLOQUEIO)
+  # --------------------------------------------------------------------------
+  security-scan:
+    name: 3. Security Scan (SCA & SAST)
+    needs: [build-and-test, linter]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      # SCA: Software Composition Analysis (Trivy fs)
+      - name: Run SCA (Trivy FS Scan)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: ${{ env.SERVICE_DIR }}
+          format: 'table'
+          exit-code: '1' # Falha em vulnerabilidades CRÍTICAS
+          ignore-unfixed: true
+          severity: 'CRITICAL'
+
+      # SAST: Static Application Security Testing (gosec)
+      # gosec >= 2.22 é necessário com Go 1.24; a análise roda dentro do módulo do serviço
+      - name: Run SAST (Gosec)
+        working-directory: ${{ env.SERVICE_DIR }}
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.22.5
+          gosec -severity high -confidence high -exclude-dir=tests ./...
+
+  # --------------------------------------------------------------------------
+  # 4. DOCKER BUILD, CONTAINER SCAN & PUSH TO ECR
+  # --------------------------------------------------------------------------
+  docker-build-and-push:
+    name: 4. Docker Build, Scan & Push
+    needs: [security-scan]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.vars.outputs.image_tag }}
+      ecr_image: ${{ steps.docker-build.outputs.ecr_image }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set Image Tag
+        id: vars
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          TAG="v1.0.0-${SHORT_SHA}"
+          echo "image_tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker Image
+        run: |
+          FULL_IMAGE="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.vars.outputs.image_tag }}"
+          docker build -t "$FULL_IMAGE" -t "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest" ${{ env.SERVICE_DIR }}
+          echo "ecr_image=$FULL_IMAGE" >> "$GITHUB_OUTPUT"
+        id: docker-build
+
+      # Container Security Scan
+      - name: Run Container Scan (Trivy Image)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.vars.outputs.image_tag }}"
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL'
+
+      - name: Ensure ECR Repository Exists
+        run: |
+          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} --region ${{ env.AWS_REGION }} || aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }} --region ${{ env.AWS_REGION }} --image-tag-mutability MUTABLE
+
+      - name: Push Image to Amazon ECR
+        run: |
+          docker push "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.vars.outputs.image_tag }}"
+          docker push "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest"
+
+  # --------------------------------------------------------------------------
+  # 5. GITOPS AUTO-UPDATE (ATUALIZAÇÃO DE TAG NO ARQUIVO DEPLOYMENT.YAML)
+  # --------------------------------------------------------------------------
+  gitops-update:
+    name: 5. GitOps Auto-Update
+    needs: [docker-build-and-push]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Image in GitOps Deployment Manifest
+        run: |
+          NEW_IMAGE="${{ needs.docker-build-and-push.outputs.ecr_image }}"
+          echo "Atualizando manifest GitOps com a nova imagem: $NEW_IMAGE"
+          sed -i "s|image: .*togglemaster/evaluation-service:.*|image: ${NEW_IMAGE}|g" ${{ env.GITOPS_DEPLOYMENT_FILE }}
+          git diff ${{ env.GITOPS_DEPLOYMENT_FILE }}
+
+      - name: Commit and Push Manifest Update
+        run: |
+          git config --global user.name "CI-Runner"
+          git config --global user.email "ci-runner@users.noreply.github.com"
+          git add ${{ env.GITOPS_DEPLOYMENT_FILE }}
+          if git diff-index --quiet HEAD; then
+            echo "Nenhuma alteracao detectada no manifesto GitOps."
+          else
+            git commit -m "chore(gitops): update evaluation-service image to ${{ needs.docker-build-and-push.outputs.image_tag }} [skip ci]"
+            # Vários pipelines podem atualizar o repositório ao mesmo tempo (um arquivo
+            # por serviço): rebase + nova tentativa evita a rejeição do push.
+            for attempt in 1 2 3 4 5; do
+              if git pull --rebase origin main && git push origin main; then
+                exit 0
+              fi
+              echo "Push rejeitado (tentativa $attempt); aguardando para tentar de novo..."
+              sleep $((attempt * 5))
+            done
+            echo "Nao foi possivel publicar a atualizacao do manifesto GitOps."
+            exit 1
+          fi

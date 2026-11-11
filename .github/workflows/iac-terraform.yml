@@ -1,0 +1,48 @@
+name: IaC Terraform Validation & Security
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/iac-terraform.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/iac-terraform.yml'
+  workflow_dispatch:
+
+jobs:
+  terraform-validate:
+    name: Terraform Format, Validate & Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.9
+
+      - name: Check Terraform Formatting
+        working-directory: terraform
+        run: terraform fmt -check -recursive
+
+      - name: Initialize Terraform (Backend Disabled for Validation)
+        working-directory: terraform
+        run: terraform init -backend=false
+
+      - name: Validate Terraform Syntax
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Security Scan (Trivy Config Scan)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: 'terraform/'
+          format: 'table'
+          exit-code: '0'
+          severity: 'HIGH,CRITICAL'

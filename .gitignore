@@ -1,0 +1,73 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+*.tfvars
+!*.tfvars.example
+
+# Python
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+
+# Go
+services/auth-service/auth-service
+services/evaluation-service/evaluation-service
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Ambientes & Segredos
+.env
+.env.*
+!*.example
+*.pem
+*.key
+*.csv
+
+# IDEs & Sistema
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Roteiros locais (fora do controle de versão)
+*roteiro*
+*roteiro_gravacao*
+docs/roteiro_gravacao.md
+exemplo de roteiro de video.txt
+
+evidencias/

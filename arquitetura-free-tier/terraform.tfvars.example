@@ -1,0 +1,15 @@
+aws_region       = "us-east-1"
+environment      = "production"
+cluster_name     = "togglemaster-cluster"
+vpc_cidr         = "10.0.0.0/16"
+db_password      = "ToggleMaster123"
+
+# MODO FREE TIER (100% elegível ao nível gratuito da AWS - Custo Zero)
+# Quando true: cria 1x EC2 t3.micro (Docker/Compose) + 1x RDS db.t3.micro + DynamoDB + SQS, sem NAT Gateway e sem EKS
+enable_free_tier = true
+
+# CONFIGURAÇÕES AVANÇADAS (Para quando enable_free_tier = false)
+use_aws_academy     = false
+node_instance_types = ["t3.small"]
+desired_nodes       = 2
+install_argocd      = true
